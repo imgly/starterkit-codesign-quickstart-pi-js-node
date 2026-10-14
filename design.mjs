@@ -10,6 +10,7 @@ import {
 } from '@imgly/codesign-sdk';
 
 const brief = process.argv[2];
+const task = `${brief}\n\nDesign this and reply once it is done. No one can answer questions during this run.`;
 const missing = [
   ...(brief ? [] : ['a brief (the first argument)']),
   ...['IMGLY_CESDK_LICENSE', 'EXECUTOR_TOKEN'].filter((n) => !process.env[n])
@@ -98,6 +99,14 @@ agent.subscribe((e) => {
 const cause = (err) =>
   `${err?.kind ? `${err.kind}: ` : ''}${String(err instanceof Error ? err.message : err).split('\n')[0]}`;
 
+/** How many blocks the pages hold, read with a free edit: none when the model only asked a question. */
+const blocksOnPages = async () =>
+  (
+    await codesign.edit(`let n = 0;
+for (const page of await engine.design.findByType('page')) n += (await engine.design.getChildren(page)).length;
+return n;`)
+  ).value;
+
 // The free .imgly first: when the billed PNG export fails, or the run ends early, the design the model made is kept.
 async function save(withPNG) {
   let file = 'out/design.imgly';
@@ -105,6 +114,13 @@ async function save(withPNG) {
     await mkdir('out', { recursive: true });
     await writeFile(file, await codesign.export('imgly'));
     if (!withPNG) return console.error(`Wrote ${file}, the design so far.`);
+    if ((await blocksOnPages()) === 0) {
+      console.error(
+        'The page has no blocks, so no PNG was exported (each export is charged). If the model asked a question, put the answer into the brief, and run again.'
+      );
+      process.exitCode = 1;
+      return;
+    }
     file = 'out/design.png';
     await writeFile(file, await codesign.export('png'));
     console.log('Wrote out/design.png and out/design.imgly');
@@ -116,7 +132,7 @@ async function save(withPNG) {
 
 const started = Date.now();
 try {
-  await agent.prompt(brief);
+  await agent.prompt(task);
 } catch (err) {
   console.error(`The run failed: ${cause(err)}`);
 }
