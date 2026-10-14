@@ -94,16 +94,41 @@ agent.subscribe((e) => {
     console.log(`${e.isError ? '✗' : '✓'} ${e.toolName}`);
 });
 
+/** A failure in one line: the SDK error's kind and the first line of its message, not a stack or a request body. */
+const cause = (err) =>
+  `${err?.kind ? `${err.kind}: ` : ''}${String(err instanceof Error ? err.message : err).split('\n')[0]}`;
+
+// The free .imgly first: when the billed PNG export fails, or the run ends early, the design the model made is kept.
+async function save(withPNG) {
+  let file = 'out/design.imgly';
+  try {
+    await mkdir('out', { recursive: true });
+    await writeFile(file, await codesign.export('imgly'));
+    if (!withPNG) return console.error(`Wrote ${file}, the design so far.`);
+    file = 'out/design.png';
+    await writeFile(file, await codesign.export('png'));
+    console.log('Wrote out/design.png and out/design.imgly');
+  } catch (err) {
+    console.error(`Could not write ${file}: ${cause(err)}`);
+    process.exitCode = 1;
+  }
+}
+
 const started = Date.now();
-await agent.prompt(brief);
+try {
+  await agent.prompt(brief);
+} catch (err) {
+  console.error(`The run failed: ${cause(err)}`);
+}
 const last = agent.state.messages.at(-1);
 const seconds = Math.round((Date.now() - started) / 1000);
 // pi does not throw when the gateway refuses (402 when the credits run out): the error is in the last message.
 if (last?.role !== 'assistant' || last.stopReason === 'error') {
   console.error(
-    `The run ended with an error after ${seconds} s: ${last?.role === 'assistant' ? last.errorMessage : 'no answer'}; nothing exported.`
+    `The run ended with an error after ${seconds} s: ${last?.role === 'assistant' ? last.errorMessage : 'no answer'}`
   );
   process.exitCode = 1;
+  await save(false);
 } else {
   console.log(
     `\n${last.content
@@ -117,9 +142,6 @@ if (last?.role !== 'assistant' || last.stopReason === 'error') {
   console.log(
     `${answers.length} steps, ${seconds} s, ${input} input / ${usage('output')} output tokens`
   );
-  await mkdir('out', { recursive: true });
-  await writeFile('out/design.png', await codesign.export('png'));
-  await writeFile('out/design.imgly', await codesign.export('imgly'));
-  console.log('Wrote out/design.png and out/design.imgly');
+  await save(true);
 }
 await codesign.release(); // ends the design's session now; the engine closes about 30 s later
